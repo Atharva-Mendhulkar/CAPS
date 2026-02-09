@@ -61,7 +61,12 @@ export default function App() {
   useEffect(() => {
     if (isListening) {
       if (state !== "listening") setState("listening");
-      if (transcript) setMessages([transcript]); // Show what is being heard
+      // Only show transcript if it has content (avoids stale text from previous session)
+      if (transcript) {
+        setMessages(["Listening...", `Heard: "${transcript}"`]);
+      } else {
+        setMessages(["Listening..."]);
+      }
     } else if (state === "listening") {
       // Stopped listening, now processing
       handleVoiceEnd();
@@ -69,14 +74,19 @@ export default function App() {
   }, [isListening, transcript]);
 
   const startVoiceInput = () => {
-    if (state === "awaiting" || state === "blocked") {
-      // Reset from approval/blocked screen
-      setState("idle");
-      setMessages([]);
-      setDelayedPayment(null);
+    // If in a non-interruptible state (processing/understanding), ignore
+    if (state === "processing" || state === "understanding" || state === "listening") return;
+
+    // If there's leftover state from a previous transaction, refresh the page
+    if (state !== "idle") {
+      window.location.reload();
+      return;
     }
-    if (state !== "idle" && state !== "completed" && state !== "error") return;
+
+    // Clear all previous state before starting fresh
+    setState("idle");
     setMessages(["Listening..."]);
+    setDelayedPayment(null);
     startListening();
   };
 
