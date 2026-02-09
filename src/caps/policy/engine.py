@@ -17,6 +17,7 @@ from caps.policy.rules.hard_invariants import HARD_INVARIANT_RULES
 from caps.policy.rules.velocity import VELOCITY_RULES
 from caps.policy.rules.threat_defense import THREAT_DEFENSE_RULES
 from caps.policy.rules.behavioral import BEHAVIORAL_RULES
+from caps.policy.rules.trust import TRUST_RULES
 
 
 logger = logging.getLogger(__name__)
@@ -26,11 +27,12 @@ class PolicyEngine:
     """
     Deterministic Policy Engine for payment decisions.
     
-    Evaluates intents through 4 layers of rules:
+    Evaluates intents through 5 layers of rules:
     - Layer 1: Hard Invariants (DENY on fail)
     - Layer 2: Velocity Controls (COOLDOWN on fail)
     - Layer 3: Agentic Threat Defense (ESCALATE on fail)
     - Layer 4: Behavioral Analysis (ESCALATE on fail)
+    - Layer 5: Trust & Safety (ESCALATE on fail)
     
     SECURITY: This engine runs deterministic Python code.
     The LLM cannot influence or bypass these rules.
@@ -46,6 +48,7 @@ class PolicyEngine:
         self.rules.extend(VELOCITY_RULES)
         self.rules.extend(THREAT_DEFENSE_RULES)
         self.rules.extend(BEHAVIORAL_RULES)
+        self.rules.extend(TRUST_RULES)
         
         logger.info(f"Policy Engine initialized with {len(self.rules)} rules")
     

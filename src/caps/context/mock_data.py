@@ -5,7 +5,7 @@ Provides realistic mock data for testing and development.
 Simulates various user and merchant scenarios.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 from caps.context.models import UserContext, MerchantContext
 
 
@@ -21,8 +21,10 @@ MOCK_USERS = {
         is_known_device=True,
         session_age_seconds=3600,
         location="Vellore, TN",
-        last_transaction_time=datetime.utcnow() - timedelta(minutes=15),
+        last_transaction_time=datetime.now(UTC) - timedelta(minutes=15),
         account_age_days=180,
+        trust_score=0.8,
+        known_contacts=["canteen@vit", "shop@upi"],
     ),
     "user_low_balance": UserContext(
         user_id="user_low_balance",
@@ -34,8 +36,10 @@ MOCK_USERS = {
         is_known_device=True,
         session_age_seconds=1800,
         location="Chennai, TN",
-        last_transaction_time=datetime.utcnow() - timedelta(minutes=30),
+        last_transaction_time=datetime.now(UTC) - timedelta(minutes=30),
         account_age_days=90,
+        trust_score=0.6,
+        known_contacts=["shop@upi"],
     ),
     "user_high_velocity": UserContext(
         user_id="user_high_velocity",
@@ -47,8 +51,10 @@ MOCK_USERS = {
         is_known_device=True,
         session_age_seconds=600,
         location="Bangalore, KA",
-        last_transaction_time=datetime.utcnow() - timedelta(seconds=45),
+        last_transaction_time=datetime.now(UTC) - timedelta(seconds=45),
         account_age_days=365,
+        trust_score=0.4, # Lower due to velocity
+        known_contacts=["canteen@vit", "cafe@bank", "shop@upi"],
     ),
     "user_new_device": UserContext(
         user_id="user_new_device",
@@ -62,6 +68,8 @@ MOCK_USERS = {
         location="Mumbai, MH",
         last_transaction_time=None,
         account_age_days=5,
+        trust_score=0.2, # Low for new device/account
+        known_contacts=[],
     ),
     "user_test": UserContext(
         user_id="user_test",
@@ -73,8 +81,10 @@ MOCK_USERS = {
         is_known_device=True,
         session_age_seconds=1200,
         location="Delhi, DL",
-        last_transaction_time=datetime.utcnow() - timedelta(minutes=45),
+        last_transaction_time=datetime.now(UTC) - timedelta(minutes=45),
         account_age_days=120,
+        trust_score=0.9,
+        known_contacts=["canteen@vit", "arihant gupta@upi", "arihantgupta@upi"], # Add for testing
     ),
 }
 
@@ -90,7 +100,7 @@ MOCK_MERCHANTS = {
         refund_rate=0.01,
         fraud_reports=0,
         merchant_category="5812",  # Restaurants
-        registration_date=datetime.utcnow() - timedelta(days=730),
+        registration_date=datetime.now(UTC) - timedelta(days=730),
     ),
     "shop@upi": MerchantContext(
         merchant_vpa="shop@upi",
@@ -101,7 +111,7 @@ MOCK_MERCHANTS = {
         refund_rate=0.025,
         fraud_reports=1,
         merchant_category="5411",  # Grocery
-        registration_date=datetime.utcnow() - timedelta(days=365),
+        registration_date=datetime.now(UTC) - timedelta(days=365),
     ),
     "newstore@upi": MerchantContext(
         merchant_vpa="newstore@upi",
@@ -112,7 +122,7 @@ MOCK_MERCHANTS = {
         refund_rate=0.04,
         fraud_reports=0,
         merchant_category="5999",  # Miscellaneous
-        registration_date=datetime.utcnow() - timedelta(days=15),
+        registration_date=datetime.now(UTC) - timedelta(days=15),
     ),
     "scam@merchant": MerchantContext(
         merchant_vpa="scam@merchant",
@@ -123,7 +133,7 @@ MOCK_MERCHANTS = {
         refund_rate=0.45,
         fraud_reports=12,
         merchant_category="5999",
-        registration_date=datetime.utcnow() - timedelta(days=7),
+        registration_date=datetime.now(UTC) - timedelta(days=7),
     ),
     "cafe@bank": MerchantContext(
         merchant_vpa="cafe@bank",
@@ -134,7 +144,7 @@ MOCK_MERCHANTS = {
         refund_rate=0.01,
         fraud_reports=0,
         merchant_category="5814",  # Fast Food
-        registration_date=datetime.utcnow() - timedelta(days=540),
+        registration_date=datetime.now(UTC) - timedelta(days=540),
     ),
 }
 
@@ -155,5 +165,5 @@ def get_default_merchant(vpa: str = "unknown@merchant") -> MerchantContext:
         refund_rate=0.0,
         fraud_reports=0,
         merchant_category="5999",
-        registration_date=datetime.utcnow(),
+        registration_date=datetime.now(UTC),
     )

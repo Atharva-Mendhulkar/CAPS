@@ -140,9 +140,25 @@ class ContextService:
         if user_id in self.users:
             user = self.users[user_id]
             old_balance = user.wallet_balance
+            
             if transaction.status == "success" and not transaction.is_refund:
+                 # 1. Update Balance
                  user.wallet_balance -= transaction.amount
                  print(f"DEBUG: Updated balance for {user_id}: {old_balance} -> {user.wallet_balance}")
+                 
+                 # 2. Dynamic Trust Memory
+                 # Add to known contacts if not present
+                 if transaction.merchant_vpa not in user.known_contacts:
+                     user.known_contacts.append(transaction.merchant_vpa)
+                     print(f"DEBUG: Added {transaction.merchant_vpa} to known_contacts")
+                     
+                 # Increase trust score (capped at 1.0)
+                 # Small increment for successful transaction
+                 old_trust = user.trust_score
+                 user.trust_score = min(1.0, user.trust_score + 0.01)
+                 if user.trust_score > old_trust:
+                     print(f"DEBUG: Increased trust score: {old_trust} -> {user.trust_score}")
+                     
             elif transaction.status == "success" and transaction.is_refund:
                  user.wallet_balance += transaction.amount
                  print(f"DEBUG: Refunded balance for {user_id}: {old_balance} -> {user.wallet_balance}")

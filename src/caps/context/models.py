@@ -7,8 +7,8 @@ SECURITY: This data is NEVER sent to the LLM. It's fetched AFTER intent validati
 and used only for policy evaluation.
 """
 
-from datetime import datetime
-from typing import Optional
+from datetime import datetime, UTC
+from typing import Optional, List, Dict
 from pydantic import BaseModel, Field
 
 
@@ -70,6 +70,22 @@ class UserContext(BaseModel):
     account_age_days: int = Field(
         ge=0,
         description="Days since account creation",
+    )
+    
+    # Trust & Safety
+    trust_score: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="User's dynamic trust score (0.0-1.0)",
+    )
+    known_contacts: List[str] = Field(
+        default_factory=list,
+        description="List of trusted/previously paid merchant VPAs",
+    )
+    behavior_profile: Optional[Dict] = Field(
+        default=None,
+        description="Profile of typical spending behavior (amounts, locations)",
     )
 
 
@@ -139,6 +155,6 @@ class TransactionRecord(BaseModel):
     user_id: str
     merchant_vpa: str
     amount: float
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
     status: str = Field(default="pending")  # pending, success, failed
     is_refund: bool = Field(default=False)
