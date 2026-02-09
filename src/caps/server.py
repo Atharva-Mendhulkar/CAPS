@@ -1,13 +1,14 @@
 """
-CAPS API Server - Phase 7
+CAPS API Server - Phase 8: Multi-User Platform
 Exposes the CAPS payment processing logic via REST API for frontend integration.
+Now with user authentication and database-backed operations.
 """
 
 import logging
 from datetime import datetime, timedelta, UTC
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -24,12 +25,29 @@ from caps.memory import SessionMemory
 from caps.ledger import AuditLedger
 from caps.intelligence import FraudIntelligence
 
+# Auth & Database
+from caps.auth import (
+    RegisterRequest,
+    LoginRequest,
+    AuthResponse,
+    get_current_user,
+    register_user,
+    login_user,
+)
+from caps.database import (
+    get_user_by_username,
+    get_user_by_id,
+    get_all_users,
+    get_user_transactions,
+    transfer_money,
+)
+
 # Configure Logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # FastAPI App
-app = FastAPI(title="CAPS API", version="0.7.0")
+app = FastAPI(title="CAPS API", version="0.8.0")
 
 # CORS middleware
 origins = [
@@ -84,10 +102,89 @@ class CAPSContainer:
 caps = CAPSContainer()
 
 
-# Routes
+# ============== AUTH ROUTES ==============
+
+@app.post("/auth/register")
+async def register(req: RegisterRequest):
+    """Register a new user."""
+    return register_user(req.username, req.email, req.password)
+
+
+@app.post("/auth/login")
+async def login(req: LoginRequest):
+    """Login and get JWT token."""
+    return login_user(req.username, req.password)
+
+
+@app.get("/auth/me")
+async def get_me(current_user: dict = Depends(get_current_user)):
+    """Get current authenticated user info."""
+    return {
+        "id": current_user["id"],
+        "username": current_user["username"],
+        "email": current_user["email"],
+        "balance": current_user["balance"],
+    }
+
+
+# ============== USER & TRANSACTION ROUTES ==============
+
+@app.get("/users")
+async def list_users(current_user: dict = Depends(get_current_user)):
+    """Get list of all users (for recipient selection)."""
+    users = get_all_users(exclude_id=current_user["id"])
+    return {"users": users}
+
+
+@app.get("/transactions")
+async def get_transactions(current_user: dict = Depends(get_current_user)):
+    """Get transaction history for current user."""
+    transactions = get_user_transactions(current_user["id"])
+    return {"transactions": transactions}
+
+
+@app.post("/transfer")
+async def transfer(
+    receiver_username: str,
+    amount: float,
+    current_user: dict = Depends(get_current_user)
+):
+    """Direct P2P transfer without voice command."""
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="Amount must be positive")
+    
+    receiver = get_user_by_username(receiver_username)
+    if not receiver:
+        raise HTTPException(status_code=404, detail="Recipient not found")
+    
+    if receiver["id"] == current_user["id"]:
+        raise HTTPException(status_code=400, detail="Cannot transfer to yourself")
+    
+    transaction_id = transfer_money(
+        sender_id=current_user["id"],
+        receiver_id=receiver["id"],
+        amount=amount
+    )
+    
+    if not transaction_id:
+        raise HTTPException(status_code=400, detail="Transfer failed - insufficient balance")
+    
+    # Update balance in response
+    updated_user = get_user_by_id(current_user["id"])
+    
+    return {
+        "status": "success",
+        "transaction_id": transaction_id,
+        "message": f"Transferred ₹{amount:.2f} to {receiver_username}",
+        "new_balance": updated_user["balance"]
+    }
+
+
+# ============== LEGACY ROUTES ==============
+
 @app.get("/")
 async def root():
-    return {"status": "online", "system": "CAPS"}
+    return {"status": "online", "system": "CAPS", "version": "0.8.0"}
 
 
 @app.get("/context/{user_id}")
@@ -199,6 +296,25 @@ async def process_command(req: CommandRequest):
         amount=intent.amount,
         merchant_vpa=intent.merchant_vpa
     )
+
+    # Validate PAYMENT intents have both amount and receiver
+    if intent.intent_type == IntentType.PAYMENT:
+        missing = []
+        if not intent.amount or intent.amount <= 0:
+            missing.append("amount")
+        if not intent.merchant_vpa:
+            missing.append("recipient")
+        
+        if missing:
+            missing_str = " and ".join(missing)
+            logger.warning(f"Payment rejected - missing: {missing_str}")
+            return CommandResponse(
+                status="error",
+                message=f"I need a {missing_str} to process this payment. Try saying something like 'Pay Arihant 500 rupees'.",
+                intent=intent.model_dump(),
+                user_state=get_user_state(req.user_id),
+                context_used=resolved if resolved else None
+            )
 
     # HANDLE NON-PAYMENT INTENTS
     if intent.intent_type == IntentType.BALANCE_INQUIRY:

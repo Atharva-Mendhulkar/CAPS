@@ -8,7 +8,7 @@ SECURITY: This service holds sensitive data that NEVER goes to the LLM.
 """
 
 from datetime import datetime, timedelta, UTC
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 

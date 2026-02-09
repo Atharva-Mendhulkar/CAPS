@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { FileText, Mic, User, UserX } from "lucide-react";
+import { FileText, Mic, User, UserX, LogOut, Wallet, History } from "lucide-react";
 import { VoiceOrb } from "./components/VoiceOrb";
 import { AIProcessCloud } from "./components/AIProcessCloud";
 import { DecisionButtons } from "./components/DecisionButtons";
@@ -9,6 +9,10 @@ import { LogEntry } from "./components/LogCard";
 import { DelayedPaymentTimer } from "./components/DelayedPaymentTimer";
 import { useVoiceInput } from "../hooks/useVoiceInput";
 import { processCommand, CommandResponse } from "../api/client";
+import { useAuth } from "./components/AuthContext";
+import { Login } from "./components/Login";
+import { Register } from "./components/Register";
+import { TransactionHistory } from "./components/TransactionHistory";
 
 type AppState =
   | "idle"
@@ -33,12 +37,22 @@ interface DelayedPayment {
 }
 
 export default function App() {
+  const { user, isAuthenticated, isLoading, logout, refreshUser, updateBalance } = useAuth();
+  const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
   const [state, setState] = useState<AppState>("idle");
   const [messages, setMessages] = useState<string[]>([]);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [logsOpen, setLogsOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [delayedPayment, setDelayedPayment] = useState<DelayedPayment | null>(null);
   const [isBusy, setIsBusy] = useState(false);
+
+  // Refresh user data after transactions
+  useEffect(() => {
+    if (state === 'completed' && isAuthenticated) {
+      refreshUser();
+    }
+  }, [state]);
 
   // Real Voice Input Hook
   const { isListening, transcript, startListening, stopListening } = useVoiceInput();
@@ -55,6 +69,12 @@ export default function App() {
   }, [isListening, transcript]);
 
   const startVoiceInput = () => {
+    if (state === "awaiting" || state === "blocked") {
+      // Reset from approval/blocked screen
+      setState("idle");
+      setMessages([]);
+      setDelayedPayment(null);
+    }
     if (state !== "idle" && state !== "completed" && state !== "error") return;
     setMessages(["Listening..."]);
     startListening();
@@ -77,7 +97,7 @@ export default function App() {
       setState("understanding");
       setMessages(["Interpreting command...", `Input: ${transcript}`]);
 
-      const result = await processCommand(transcript);
+      const result = await processCommand(transcript, user?.username || 'user_default');
 
       // Map backend result to UI state
       processBackendResult(result);
@@ -198,6 +218,17 @@ export default function App() {
 
     if (decision === "approved") {
       setState("completed");
+
+      // Immediately update balance in UI
+      const paymentAmount = result.intent?.amount || 0;
+      if (user && paymentAmount > 0) {
+        const newBalance = user.balance - paymentAmount;
+        console.log('Updating balance after payment:', user.balance, '-', paymentAmount, '=', newBalance);
+        updateBalance(newBalance);
+      }
+
+      // Also refresh from server to ensure sync
+      refreshUser();
     }
 
     setTimeout(() => {
@@ -267,6 +298,28 @@ export default function App() {
     setDelayedPayment(null);
   };
 
+  // Show loading spinner while checking auth
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-gray-950 via-gray-900 to-black flex items-center justify-center">
+        <div className="w-12 h-12 border-4 border-purple-500 border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  // Show login/register if not authenticated
+  if (!isAuthenticated) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-gray-950 via-gray-900 to-black text-white flex items-center justify-center px-4">
+        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-purple-900/20 via-transparent to-transparent pointer-events-none" />
+        {authMode === 'login' ? (
+          <Login onSwitchToRegister={() => setAuthMode('register')} />
+        ) : (
+          <Register onSwitchToLogin={() => setAuthMode('login')} />
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-950 via-gray-900 to-black text-white relative overflow-hidden">
@@ -284,6 +337,29 @@ export default function App() {
           />
         )}
       </AnimatePresence>
+
+      {/* User Info & Logout */}
+      <motion.div
+        className="absolute top-6 left-6 z-30 flex items-center gap-3"
+        initial={{ opacity: 0, x: -20 }}
+        animate={{ opacity: 1, x: 0 }}
+      >
+        <div className="px-4 py-2 rounded-full bg-white/5 backdrop-blur-xl border border-white/10 flex items-center gap-3">
+          <div className="flex items-center gap-2">
+            <Wallet className="w-4 h-4 text-green-400" />
+            <span className="text-sm font-medium text-green-400">₹{user?.balance?.toFixed(2) || '0.00'}</span>
+          </div>
+          <div className="w-px h-4 bg-white/20" />
+          <span className="text-sm text-white/60">{user?.username}</span>
+        </div>
+        <button
+          onClick={logout}
+          className="p-2 rounded-full bg-white/5 backdrop-blur-xl border border-white/10 hover:bg-red-500/20 hover:border-red-500/30 transition-all"
+          title="Logout"
+        >
+          <LogOut className="w-4 h-4 text-white/60 hover:text-red-400" />
+        </button>
+      </motion.div>
 
       {/* Busy Mode Toggle */}
       <motion.div
@@ -312,24 +388,39 @@ export default function App() {
         </button>
       </motion.div>
 
-      {/* Logs Toggle */}
-      <motion.button
-        onClick={() => setLogsOpen(true)}
-        className="absolute top-6 right-6 z-30 w-12 h-12 rounded-full bg-white/5 backdrop-blur-xl border border-white/10 flex items-center justify-center hover:bg-white/10 transition-all group"
-        whileHover={{ scale: 1.05 }}
-        whileTap={{ scale: 0.95 }}
-      >
-        <FileText className="w-5 h-5 text-white/60 group-hover:text-white/90 transition-colors" />
-        {logs.length > 0 && (
-          <motion.div
-            className="absolute -top-1 -right-1 w-5 h-5 bg-purple-500 rounded-full flex items-center justify-center text-xs font-medium"
-            initial={{ scale: 0 }}
-            animate={{ scale: 1 }}
-          >
-            {logs.length}
-          </motion.div>
-        )}
-      </motion.button>
+      {/* Top Right Buttons */}
+      <div className="absolute top-6 right-6 z-30 flex items-center gap-2">
+        {/* Transaction History Toggle */}
+        <motion.button
+          onClick={() => setHistoryOpen(true)}
+          className="w-12 h-12 rounded-full bg-white/5 backdrop-blur-xl border border-white/10 flex items-center justify-center hover:bg-white/10 transition-all group"
+          whileHover={{ scale: 1.05 }}
+          whileTap={{ scale: 0.95 }}
+          title="Transaction History"
+        >
+          <History className="w-5 h-5 text-white/60 group-hover:text-white/90 transition-colors" />
+        </motion.button>
+
+        {/* Logs Toggle */}
+        <motion.button
+          onClick={() => setLogsOpen(true)}
+          className="w-12 h-12 rounded-full bg-white/5 backdrop-blur-xl border border-white/10 flex items-center justify-center hover:bg-white/10 transition-all group"
+          whileHover={{ scale: 1.05 }}
+          whileTap={{ scale: 0.95 }}
+          title="Transaction Logs"
+        >
+          <FileText className="w-5 h-5 text-white/60 group-hover:text-white/90 transition-colors" />
+          {logs.length > 0 && (
+            <motion.div
+              className="absolute -top-1 -right-1 w-5 h-5 bg-purple-500 rounded-full flex items-center justify-center text-xs font-medium"
+              initial={{ scale: 0 }}
+              animate={{ scale: 1 }}
+            >
+              {logs.length}
+            </motion.div>
+          )}
+        </motion.button>
+      </div>
 
       {/* Main Interface */}
       <div className="relative z-10 min-h-screen flex flex-col items-center justify-center px-6 py-12 gap-12">
@@ -374,6 +465,7 @@ export default function App() {
       </div>
 
       <LogsPanel logs={logs} isOpen={logsOpen} onClose={() => setLogsOpen(false)} />
+      <TransactionHistory isOpen={historyOpen} onClose={() => setHistoryOpen(false)} />
     </div>
   );
 }

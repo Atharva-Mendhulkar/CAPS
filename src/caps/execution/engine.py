@@ -4,7 +4,7 @@ import logging
 import random
 import uuid
 from datetime import datetime, timedelta, UTC
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from caps.execution.models import (
     ExecutionState,
@@ -208,6 +208,66 @@ class ExecutionEngine:
                 self.context_service.record_transaction(record.user_id, ctx_txn)
             except Exception as e:
                 logger.error(f"Failed to record transaction in Context Service: {e}")
+        
+        # Update database: P2P transfer + persistent transaction history
+        try:
+            from caps.database import (
+                get_user_by_username, update_balance, get_db
+            )
+            
+            sender = get_user_by_username(record.user_id)
+            
+            # Try to find receiver by merchant_vpa
+            # merchant_vpa could be "username@upi" or just "username"
+            receiver = None
+            if record.merchant_vpa:
+                # Extract username from VPA (e.g. "arihant@upi" -> "arihant")
+                receiver_name = record.merchant_vpa.split("@")[0].lower()
+                receiver = get_user_by_username(receiver_name)
+            
+            # Block self-payment
+            if sender and receiver and sender['id'] == receiver['id']:
+                logger.warning(f"Self-payment blocked: {record.user_id}")
+                receiver = None  # Treat as external payment
+            
+            if sender and sender.get('balance', 0) >= record.amount:
+                # Deduct from sender (always, even for non-platform recipients)
+                new_sender_balance = sender['balance'] - record.amount
+                update_balance(sender['id'], new_sender_balance)
+                logger.info(f"Sender balance updated: {record.user_id} -> ₹{new_sender_balance:.2f}")
+                
+                # Credit to receiver ONLY if they're a different platform user
+                if receiver:
+                    new_receiver_balance = receiver['balance'] + record.amount
+                    update_balance(receiver['id'], new_receiver_balance)
+                    logger.info(f"Receiver balance updated: {receiver['username']} -> ₹{new_receiver_balance:.2f}")
+                else:
+                    logger.info(f"External payment to {record.merchant_vpa} (receiver not on platform)")
+                
+                # Persist transaction to database
+                with get_db() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        INSERT INTO transactions 
+                        (transaction_id, sender_id, receiver_id, sender_username, receiver_username, amount, status, completed_at)
+                        VALUES (?, ?, ?, ?, ?, ?, 'completed', ?)
+                    """, (
+                        record.transaction_id,
+                        sender['id'],
+                        receiver['id'] if receiver else 0,
+                        sender['username'],
+                        receiver['username'] if receiver else record.merchant_vpa,
+                        record.amount,
+                        datetime.now(UTC).isoformat()
+                    ))
+                    logger.info(f"Transaction persisted: {record.transaction_id}")
+            elif sender:
+                logger.warning(f"Insufficient balance: {sender['balance']} < {record.amount}")
+            else:
+                logger.warning(f"Sender not found in database: {record.user_id}")
+                
+        except Exception as e:
+            logger.warning(f"Database update error: {e}")
         
         return ExecutionResult(
             success=True,
