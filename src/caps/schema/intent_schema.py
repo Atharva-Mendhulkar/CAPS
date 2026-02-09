@@ -19,12 +19,18 @@ class IntentType(str, Enum):
     PAYMENT = "PAYMENT"
     BALANCE_INQUIRY = "BALANCE_INQUIRY"
     TRANSACTION_HISTORY = "TRANSACTION_HISTORY"
-
+    SPENDING_ANALYSIS = "SPENDING_ANALYSIS"
 
 class Currency(str, Enum):
     """Supported currencies."""
 
     INR = "INR"
+class DateRange(BaseModel):
+    """Date range filter."""
+    
+    period: Optional[str] = Field(None, description="day, month, year, or custom")
+    start_date: Optional[datetime] = None
+    end_date: Optional[datetime] = None
 
 
 class PaymentIntent(BaseModel):
@@ -63,6 +69,12 @@ class PaymentIntent(BaseModel):
         description="Merchant's VPA (Virtual Payment Address)",
     )
 
+    # Filters for History/Analysis
+    filters: Optional[DateRange] = Field(
+        default=None,
+        description="Date filters for history and analysis",
+    )
+    
     # LLM confidence score
     confidence_score: float = Field(
         ge=0.0,

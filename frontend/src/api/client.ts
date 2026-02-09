@@ -10,7 +10,7 @@ export const apiClient = axios.create({
 });
 
 export interface PaymentIntent {
-  intent_type: 'PAYMENT' | 'BALANCE_INQUIRY' | 'TRANSACTION_HISTORY';
+  intent_type: 'PAYMENT' | 'BALANCE_INQUIRY' | 'TRANSACTION_HISTORY' | 'SPENDING_ANALYSIS';
   amount?: number | null;
   currency: string;
   merchant_vpa?: string | null;
@@ -27,7 +27,17 @@ export interface CommandResponse {
   risk_info?: {
     score: number;
     violations: string[];
+    passed_rules?: string[];
+    reason?: string;
   };
+  context_used?: Record<string, any> | null;
+  user_state?: {
+    balance: number;
+    daily_spend: number;
+    daily_limit: number;
+    trust_score: number;
+    recent_transactions: Array<{ merchant: string; amount: number; status: string; timestamp: string }>;
+  } | null;
 }
 
 export const processCommand = async (text: string, userId: string = 'user_default'): Promise<CommandResponse> => {

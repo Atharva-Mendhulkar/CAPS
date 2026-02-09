@@ -46,8 +46,34 @@ class ExecutionEngine:
         self.context_service = context_service
         self.idempotency_store: Dict[str, IdempotencyKey] = {}
         self.transaction_log: Dict[str, TransactionRecord] = {}
+        self._seed_mock_data()
         
         logger.info(f"Execution Engine initialized (failure_rate={failure_rate})")
+
+    def _seed_mock_data(self):
+        """Seed some initial mock transactions for demo purposes."""
+        start_time = datetime.now(UTC) - timedelta(days=2)
+        users = ["test_user"]
+        merchants = ["shop@upi", "cafe@upi", "movies@upi", "cab@upi"]
+        
+        for i in range(5):
+            txn_id = str(uuid.uuid4())
+            merchant = merchants[i % len(merchants)]
+            amount = 100.0 + (i * 50)
+            
+            record = TransactionRecord(
+                transaction_id=txn_id,
+                intent_id=str(uuid.uuid4()),
+                intent_hash="mock_intent_hash",
+                user_id="test_user",
+                amount=amount,
+                merchant_vpa=merchant,
+                state=ExecutionState.COMPLETED,
+                created_at=start_time + timedelta(hours=i*4),
+                approval_hash="mock_hash",
+                executed_at=start_time + timedelta(hours=i*4, seconds=30)
+            )
+            self.transaction_log[txn_id] = record
     
     def execute(self, record: TransactionRecord) -> ExecutionResult:
         """
@@ -197,13 +223,73 @@ class ExecutionEngine:
         """Get a transaction by ID."""
         return self.transaction_log.get(transaction_id)
     
-    def get_transaction_history(self, user_id: str, limit: int = 10) -> list[TransactionRecord]:
-        """Get transaction history for a user."""
+    def get_transaction_history(
+        self, 
+        user_id: str, 
+        limit: int = 50,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None
+    ) -> list[TransactionRecord]:
+        """
+        Get transaction history for a user with optional date filtering.
+        """
         user_txns = [
             t for t in self.transaction_log.values()
             if t.user_id == user_id
         ]
+        
+        # Filter by date if provided
+        if start_date:
+            user_txns = [t for t in user_txns if t.created_at >= start_date]
+        if end_date:
+            user_txns = [t for t in user_txns if t.created_at <= end_date]
+            
         return sorted(user_txns, key=lambda t: t.created_at, reverse=True)[:limit]
+
+    def get_spending_analysis(
+        self,
+        user_id: str,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None
+    ) -> Dict[str, Any]:
+        """
+        Analyze spending habits for a user within a timeframe.
+        """
+        txns = self.get_transaction_history(user_id, limit=1000, start_date=start_date, end_date=end_date)
+        
+        # Filter only successful debits (spending)
+        spending_txns = [
+            t for t in txns 
+            if t.state in (ExecutionState.COMPLETED, ExecutionState.EXECUTING)
+        ]
+        
+        total_spend = sum(t.amount for t in spending_txns)
+        
+        # Group by merchant
+        by_merchant = {}
+        for t in spending_txns:
+            merchant = t.merchant_vpa
+            if merchant not in by_merchant:
+                by_merchant[merchant] = 0.0
+            by_merchant[merchant] += t.amount
+            
+        # Format for chart
+        breakdown = [
+            {"name": m, "value": amt} 
+            for m, amt in by_merchant.items()
+        ]
+        # Sort by spend
+        breakdown.sort(key=lambda x: x["value"], reverse=True)
+        
+        return {
+            "total_spend": total_spend,
+            "transaction_count": len(spending_txns),
+            "breakdown": breakdown,
+            "period": {
+                "start": start_date.isoformat() if start_date else "All Time",
+                "end": end_date.isoformat() if end_date else "Now"
+            }
+        }
     
     def _generate_idempotency_key(self, record: TransactionRecord) -> str:
         """Generate idempotency key from transaction details."""

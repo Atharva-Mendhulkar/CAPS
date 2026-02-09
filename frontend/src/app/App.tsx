@@ -91,10 +91,51 @@ export default function App() {
   };
 
   const processBackendResult = async (result: CommandResponse) => {
-    // 1. Show Intent
+    const intentType = result.intent?.intent_type;
+
+    // Handle Balance Inquiry - Text Only Response
+    if (intentType === 'BALANCE_INQUIRY' && result.execution_result) {
+      // Use 'evaluating' to keep the cloud active/typing
+      setState("evaluating");
+      setMessages([
+        `Your current balance is ₹${result.execution_result.balance}.`,
+        `Today's spending: ₹${result.execution_result.daily_spend} of ₹${result.execution_result.daily_limit || 2000} daily limit.`
+      ]);
+
+      // Wait for reading then finish
+      setTimeout(() => {
+        setState("completed");
+        setTimeout(() => setState("idle"), 2000);
+      }, 6000);
+      return;
+    }
+
+    // Handle Transaction History - Text Only Response
+    if (intentType === 'TRANSACTION_HISTORY' && result.execution_result?.history) {
+      setState("evaluating");
+      const historyMsgs = result.execution_result.history.length === 0
+        ? ["No recent transactions found."]
+        : [
+          "Your recent transactions:",
+          // @ts-ignore
+          ...result.execution_result.history.slice(0, 4).map((txn: any) =>
+            `• ₹${txn.amount} to ${txn.merchant_vpa} (${new Date(txn.timestamp).toLocaleDateString()})`
+          )
+        ];
+      setMessages(historyMsgs);
+
+      setTimeout(() => {
+        setState("completed");
+        setTimeout(() => setState("idle"), 2000);
+      }, 9000);
+      return;
+    }
+
+    // 1. Show Intent (For Payments)
     setState("evaluating");
     const steps = [
       `Intent: ${result.intent?.intent_type}`,
+      `Confidence: ${((result.intent?.confidence_score || 0) * 100).toFixed(0)}%`,
       `Amount: ${result.intent?.amount || 'N/A'}`,
       `Merchant: ${result.intent?.merchant_vpa || 'N/A'}`,
     ];
@@ -112,9 +153,6 @@ export default function App() {
 
     // 3. Decision
     setState("deciding");
-
-    const riskLevel = (result.risk_info?.score || 0) > 0.7 ? "high" :
-      (result.risk_info?.score || 0) > 0.3 ? "medium" : "low";
 
     // Logic for Busy Mode or High Risk
     if (result.policy_decision === "APPROVE") {
@@ -149,8 +187,8 @@ export default function App() {
       amount: result.intent?.amount?.toString() || "0",
       recipient: result.intent?.merchant_vpa || "Unknown",
       description: result.intent?.intent_type || "Transaction",
-      confidence: (result.intent?.confidence_score || 0) * 100,
-      context: [`Risk: ${result.risk_info?.score}`],
+      confidence: Number((result.intent?.confidence_score || 0) * 100),
+      context: [`Risk: ${result.risk_info?.score}`, `Conf: ${((result.intent?.confidence_score || 0) * 100).toFixed(0)}%`],
       policyChecks: result.risk_info?.violations || [],
       decision: decision,
       steps: [`Result: ${result.status}`, `Ref: ${result.execution_result?.reference_number || 'N/A'}`],
@@ -256,8 +294,8 @@ export default function App() {
         <button
           onClick={() => setIsBusy(!isBusy)}
           className={`px-4 py-2 rounded-full backdrop-blur-xl border transition-all flex items-center gap-2 ${isBusy
-              ? "bg-yellow-500/20 border-yellow-500/30 text-yellow-300"
-              : "bg-white/5 border-white/10 text-white/60 hover:bg-white/10"
+            ? "bg-yellow-500/20 border-yellow-500/30 text-yellow-300"
+            : "bg-white/5 border-white/10 text-white/60 hover:bg-white/10"
             }`}
         >
           {isBusy ? (

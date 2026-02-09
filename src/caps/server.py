@@ -4,6 +4,7 @@ Exposes the CAPS payment processing logic via REST API for frontend integration.
 """
 
 import logging
+from datetime import datetime, timedelta, UTC
 from typing import Dict, Any, Optional
 
 from fastapi import FastAPI, HTTPException
@@ -58,6 +59,8 @@ class CommandResponse(BaseModel):
     policy_decision: Optional[str] = None
     execution_result: Optional[Dict[str, Any]] = None
     risk_info: Optional[Dict[str, Any]] = None
+    context_used: Optional[Dict[str, Any]] = None
+    user_state: Optional[Dict[str, Any]] = None
 
 
 # Initialize CAPS Components (Singletons)
@@ -116,6 +119,30 @@ async def process_command(req: CommandRequest):
         
     logger.info(f"Enhanced input: {enhanced_text}")
 
+    # Helper to get current user state
+    def get_user_state(uid: str):
+        u_ctx = caps.context_service.get_user_context(uid)
+        if not u_ctx:
+            from caps.context.mock_data import get_default_user
+            u_ctx = get_default_user()
+        
+        # Get recent transactions
+        recent_txns = caps.execution_engine.get_transaction_history(uid)
+        return {
+            "balance": u_ctx.wallet_balance,
+            "daily_spend": u_ctx.daily_spend_today,
+            "daily_limit": 2000.0, # Hardcoded for now, ideal matches rule
+            "trust_score": u_ctx.trust_score,
+            "recent_transactions": [
+                {
+                    "merchant": t.merchant_vpa,
+                    "amount": t.amount,
+                    "status": t.state.value,
+                    "timestamp": t.created_at.isoformat() if t.created_at else None
+                } for t in recent_txns[:3] # Top 3
+            ]
+        }
+
     # 1. Intent Interpretation
     try:
         intent_data = await caps.interpreter.interpret(enhanced_text)
@@ -126,7 +153,8 @@ async def process_command(req: CommandRequest):
             return CommandResponse(
                 status="error",
                 message="Service temporarily unavailable (Rate Limit). Please try again in a moment.",
-                intent=intent_data
+                intent=intent_data,
+                user_state=get_user_state(req.user_id)
             )
 
         # Merge resolved memory if LLM missed it
@@ -141,7 +169,11 @@ async def process_command(req: CommandRequest):
     except Exception as e:
         logger.error(f"Intent parsing failed: {e}")
         # Return graceful error instead of 500
-        return CommandResponse(status="error", message=f"System Error: {str(e)}")
+        return CommandResponse(
+            status="error", 
+            message=f"System Error: {str(e)}",
+            user_state=get_user_state(req.user_id)
+        )
 
     # 2. Schema Validation (Trust Gate 1)
     validated_intent, error = caps.validator.validate_safe(intent_data)
@@ -153,7 +185,9 @@ async def process_command(req: CommandRequest):
         return CommandResponse(
             status="error", 
             message=f"I couldn't understand that clearly. {error.message}",
-            intent=intent_data
+            intent=intent_data,
+            user_state=get_user_state(req.user_id),
+            context_used=resolved if resolved else None
         )
 
     intent = validated_intent # Use the Pydantic model from now on
@@ -170,7 +204,7 @@ async def process_command(req: CommandRequest):
     if intent.intent_type == IntentType.BALANCE_INQUIRY:
         user_ctx = caps.context_service.get_user_context(req.user_id)
         if not user_ctx:
-             # Create default context if missing
+            # Create default context if missing
             from caps.context.mock_data import get_default_user
             user_ctx = get_default_user()
             
@@ -183,7 +217,9 @@ async def process_command(req: CommandRequest):
                 "balance": user_ctx.wallet_balance,
                 "daily_spend": user_ctx.daily_spend_today,
                 "currency": "INR"
-            }
+            },
+            user_state=get_user_state(req.user_id),
+            context_used=resolved if resolved else None
         )
 
     if intent.intent_type == IntentType.TRANSACTION_HISTORY:
@@ -205,7 +241,9 @@ async def process_command(req: CommandRequest):
             policy_decision="APPROVE",
             execution_result={
                 "history": history_data
-            }
+            },
+            user_state=get_user_state(req.user_id),
+            context_used=resolved if resolved else None
         )
 
     # 3. Context Retrieval (Direct sync call)
@@ -278,8 +316,12 @@ async def process_command(req: CommandRequest):
         execution_result=execution_result_dict,
         risk_info={
             "score": policy_result.risk_score,
-            "violations": [v.message for v in policy_result.violations]
-        }
+            "violations": [v.message for v in policy_result.violations],
+            "passed_rules": policy_result.passed_rules,
+            "reason": policy_result.reason
+        },
+        context_used=resolved if resolved else None,
+        user_state=get_user_state(req.user_id)
     )
 
 
