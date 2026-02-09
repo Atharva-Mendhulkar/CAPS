@@ -115,6 +115,12 @@ class MerchantContext(BaseModel):
         description="Number of fraud reports",
     )
     
+    # Risk
+    risk_state: str = Field(
+        default="NEW",
+        description="Merchant risk state (NEW, TRUSTED, WATCHLIST, BLOCKED)",
+    )
+    
     # Metadata
     merchant_category: Optional[str] = Field(
         default=None,
@@ -135,3 +141,4 @@ class TransactionRecord(BaseModel):
     amount: float
     timestamp: datetime = Field(default_factory=datetime.utcnow)
     status: str = Field(default="pending")  # pending, success, failed
+    is_refund: bool = Field(default=False)

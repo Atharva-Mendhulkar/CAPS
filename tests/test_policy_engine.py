@@ -213,7 +213,8 @@ class TestPolicyEngineLayerThree:
         
         result = self.engine.evaluate(intent, self.user_context, self.merchant_context)
         
-        assert result.decision == PolicyDecision.ESCALATE
+        # Critical severity -> DENY
+        assert result.decision == PolicyDecision.DENY
         assert "prompt_injection" in [v.rule_name for v in result.violations]
     
     def test_escalate_intent_splitting(self):

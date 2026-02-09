@@ -131,6 +131,14 @@ class PolicyEngine:
         if not violations:
             return PolicyDecision.APPROVE, "All policy checks passed"
         
+        # Check for CRITICAL violations (Any Layer) - instant DENY
+        critical_violations = [v for v in violations if v.severity == "critical"]
+        if critical_violations:
+             return (
+                 PolicyDecision.DENY,
+                 f"Critical security violation: {critical_violations[0].message}"
+             )
+        
         # Check for hard invariant violations (Layer 1) - instant DENY
         hard_violations = [v for v in violations if v.category == RuleCategory.HARD_INVARIANT]
         if hard_violations:

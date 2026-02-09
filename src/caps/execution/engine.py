@@ -32,16 +32,18 @@ class ExecutionEngine:
     Real implementation would connect to UPI Lite PSP.
     """
     
-    def __init__(self, failure_rate: float = 0.05, ledger=None):
+    def __init__(self, failure_rate: float = 0.05, ledger=None, context_service=None):
         """
         Initialize the execution engine.
         
         Args:
             failure_rate: Probability of simulated failure (0.0-1.0)
             ledger: Optional AuditLedger for structured logging
+            context_service: Optional ContextService for state updates
         """
         self.failure_rate = failure_rate
         self.ledger = ledger
+        self.context_service = context_service
         self.idempotency_store: Dict[str, IdempotencyKey] = {}
         self.transaction_log: Dict[str, TransactionRecord] = {}
         
@@ -162,6 +164,24 @@ class ExecutionEngine:
             f"₹{record.amount} → {record.merchant_vpa} "
             f"[Ref: {ref_number}]"
         )
+        
+        # Update Context/Risk Engine with success
+        if hasattr(self, 'context_service') and self.context_service:
+            try:
+                from caps.context.models import TransactionRecord as ContextTxnRecord
+                
+                ctx_txn = ContextTxnRecord(
+                    transaction_id=record.transaction_id,
+                    user_id=record.user_id,
+                    merchant_vpa=record.merchant_vpa,
+                    amount=record.amount,
+                    timestamp=record.executed_at or datetime.now(UTC),
+                    status="success",
+                    is_refund=False
+                )
+                self.context_service.record_transaction(record.user_id, ctx_txn)
+            except Exception as e:
+                logger.error(f"Failed to record transaction in Context Service: {e}")
         
         return ExecutionResult(
             success=True,

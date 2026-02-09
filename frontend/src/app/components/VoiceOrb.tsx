@@ -2,18 +2,19 @@ import { motion } from "motion/react";
 import { useEffect, useState } from "react";
 
 interface VoiceOrbProps {
-  state: 
-    | "idle"
-    | "listening"
-    | "processing"
-    | "understanding"
-    | "evaluating"
-    | "checking"
-    | "deciding"
-    | "awaiting"
-    | "executing"
-    | "completed"
-    | "blocked";
+  state:
+  | "idle"
+  | "listening"
+  | "processing"
+  | "understanding"
+  | "evaluating"
+  | "checking"
+  | "deciding"
+  | "awaiting"
+  | "executing"
+  | "completed"
+  | "blocked"
+  | "error";
 }
 
 const stateLabels: Record<VoiceOrbProps["state"], string> = {
@@ -28,11 +29,12 @@ const stateLabels: Record<VoiceOrbProps["state"], string> = {
   executing: "Executing payment…",
   completed: "Completed",
   blocked: "Blocked",
+  error: "Error",
 };
 
 export function VoiceOrb({ state }: VoiceOrbProps) {
   const [waveformBars, setWaveformBars] = useState<number[]>([]);
-  
+
   useEffect(() => {
     if (state === "listening") {
       // Generate random waveform heights
@@ -62,6 +64,7 @@ export function VoiceOrb({ state }: VoiceOrbProps) {
       case "completed":
         return "from-green-500/40 to-green-600/40";
       case "blocked":
+      case "error":
         return "from-red-500/40 to-red-600/40";
       default:
         return "from-gray-500/20 to-gray-600/20";
@@ -113,8 +116,8 @@ export function VoiceOrb({ state }: VoiceOrbProps) {
           animate={
             isActive
               ? {
-                  scale: [1, 1.05, 1],
-                }
+                scale: [1, 1.05, 1],
+              }
               : {}
           }
           transition={{

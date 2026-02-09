@@ -27,6 +27,15 @@ class MerchantBadge(str, Enum):
     CONFIRMED_SCAM = "CONFIRMED_SCAM"    # ☠️ Admin-verified scam
 
 
+class MerchantRiskState(str, Enum):
+    """Internal risk state for merchant."""
+    
+    NEW = "NEW"                  # < 5 txns or < 7 days
+    TRUSTED = "TRUSTED"          # > 5 txns, clean history
+    WATCHLIST = "WATCHLIST"      # Suspicious signals (refunds, typosquat)
+    BLOCKED = "BLOCKED"          # Confirmed abuse/impersonation
+
+
 class MerchantReport(BaseModel):
     """User report about a merchant."""
     
@@ -57,6 +66,8 @@ class MerchantScore(BaseModel):
     
     # Aggregate stats
     total_reports: int = Field(default=0)
+    total_txns: int = Field(default=0, description="Total successful transactions (from execution engine)")
+    total_refunds: int = Field(default=0, description="Total refunds processed")
     scam_reports: int = Field(default=0)
     suspicious_reports: int = Field(default=0)
     legitimate_reports: int = Field(default=0)
@@ -73,6 +84,9 @@ class MerchantScore(BaseModel):
     
     # Badge
     badge: MerchantBadge = Field(default=MerchantBadge.UNKNOWN)
+    
+    # Internal Risk State
+    risk_state: MerchantRiskState = Field(default=MerchantRiskState.NEW)
     
     # Metadata
     first_report: Optional[datetime] = Field(default=None)

@@ -1,0 +1,22 @@
+{
+  "amazon": {
+    "keywords": ["amazon", "amazonpay", "amazn"],
+    "allowed_vpas": ["amazon@apl", "amazon@icici", "amazonpay@upi"]
+  },
+  "flipkart": {
+    "keywords": ["flipkart", "flipkartpay"],
+    "allowed_vpas": ["flipkart@upi", "flipkart@axis", "flipkart@okicici"]
+  },
+  "zomato": {
+    "keywords": ["zomato", "zomatoorder"],
+    "allowed_vpas": ["zomato@upi", "zomato@hdfcbank"]
+  },
+  "swiggy": {
+    "keywords": ["swiggy", "swiggyupi"],
+    "allowed_vpas": ["swiggy@upi", "swiggy@icici"]
+  },
+  "paytm": {
+    "keywords": ["paytm", "paytmwallet"],
+    "allowed_vpas": ["paytm-merchant@paytm", "paytm@paytm"]
+  }
+}

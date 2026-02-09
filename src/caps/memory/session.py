@@ -202,7 +202,7 @@ class SessionMemory:
         resolved = {}
         
         # Check for merchant references
-        merchant_refs = ["that merchant", "same merchant", "them again", "the same"]
+        merchant_refs = ["that merchant", "same merchant", "them again", "the same", "pay him", "pay her", "pay them"]
         if any(ref in input_lower for ref in merchant_refs):
             last_merchant = self.get_last_merchant()
             if last_merchant:

@@ -12,7 +12,9 @@ from caps.intelligence.models import (
     ReportType,
     MerchantScore,
     MerchantBadge,
+    MerchantRiskState,
 )
+from caps.intelligence.risk_engine import RiskEngine
 
 
 logger = logging.getLogger(__name__)
@@ -49,17 +51,18 @@ class FraudIntelligence:
         # Keep persistent connection for in-memory DBs
         self._conn: Optional[sqlite3.Connection] = None
         if self.db_path == ":memory:":
-            self._conn = sqlite3.connect(":memory:")
+            self._conn = sqlite3.connect(":memory:", check_same_thread=False)
         
+        self.risk_engine = RiskEngine()
         self._init_db()
         
         logger.info(f"Fraud Intelligence initialized: {self.db_path}")
     
     def _get_connection(self) -> sqlite3.Connection:
-        """Get database connection."""
+        """Get a database connection."""
         if self._conn:
             return self._conn
-        return sqlite3.connect(self.db_path)
+        return sqlite3.connect(self.db_path, check_same_thread=False)
     
     def _close_connection(self, conn: sqlite3.Connection) -> None:
         """Close connection if not persistent."""
@@ -215,7 +218,66 @@ class FraudIntelligence:
         self._close_connection(conn)
         
         logger.info(f"Merchant {merchant_vpa} marked as VERIFIED_SAFE by {admin_id}")
-    
+
+    def update_transaction_stats(
+        self,
+        merchant_vpa: str,
+        success: bool = True,
+        is_refund: bool = False,
+    ) -> MerchantRiskState:
+        """
+        Update transaction counts and re-evaluate risk state.
+        Called by Execution Engine.
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        # Upsert merchant record if not exists
+        cursor.execute(
+            """INSERT OR IGNORE INTO scores (merchant_vpa, first_report, last_updated)
+               VALUES (?, ?, ?)""",
+            (merchant_vpa, datetime.now(UTC).isoformat(), datetime.now(UTC).isoformat())
+        )
+        
+        # Update counts
+        if is_refund:
+            cursor.execute(
+                "UPDATE scores SET total_refunds = total_refunds + 1, last_updated = ? WHERE merchant_vpa = ?",
+                (datetime.now(UTC).isoformat(), merchant_vpa)
+            )
+        elif success:
+            cursor.execute(
+                "UPDATE scores SET total_txns = total_txns + 1, last_updated = ? WHERE merchant_vpa = ?",
+                (datetime.now(UTC).isoformat(), merchant_vpa)
+            )
+            
+        conn.commit()
+        
+        # Fetch updated stats
+        cursor.execute("SELECT * FROM scores WHERE merchant_vpa = ?", (merchant_vpa,))
+        row = cursor.fetchone()
+        score = self._row_to_score(row)
+        
+        # Re-evaluate Risk State
+        new_state = self.risk_engine.evaluate_state_transition(
+            merchant_vpa=merchant_vpa,
+            total_txns=score.total_txns,
+            total_refunds=score.total_refunds,
+            first_seen=score.first_report or datetime.now(UTC), # Fallback if no report
+            current_state=score.risk_state,
+        )
+        
+        if new_state != score.risk_state:
+            cursor.execute(
+                "UPDATE scores SET risk_state = ?, last_updated = ? WHERE merchant_vpa = ?",
+                (new_state.value, datetime.now(UTC).isoformat(), merchant_vpa)
+            )
+            logger.info(f"Merchant {merchant_vpa} transitioned: {score.risk_state} -> {new_state}")
+            conn.commit()
+            
+        self._close_connection(conn)
+        return new_state
+
     def _update_score(self, merchant_vpa: str) -> None:
         """Update aggregated score for a merchant."""
         conn = self._get_connection()
@@ -346,7 +408,10 @@ class FraudIntelligence:
                 badge TEXT DEFAULT 'UNKNOWN',
                 first_report TEXT,
                 last_report TEXT,
-                last_updated TEXT
+                last_updated TEXT,
+                total_txns INTEGER DEFAULT 0,
+                total_refunds INTEGER DEFAULT 0,
+                risk_state TEXT DEFAULT 'NEW'
             )
         """)
         
@@ -418,6 +483,9 @@ class FraudIntelligence:
             first_report=datetime.fromisoformat(row[9]) if row[9] else None,
             last_report=datetime.fromisoformat(row[10]) if row[10] else None,
             last_updated=datetime.fromisoformat(row[11]) if row[11] else datetime.now(UTC),
+            total_txns=row[12] if len(row) > 12 else 0,
+            total_refunds=row[13] if len(row) > 13 else 0,
+            risk_state=MerchantRiskState(row[14]) if len(row) > 14 else MerchantRiskState.NEW,
         )
     
     def close(self) -> None:

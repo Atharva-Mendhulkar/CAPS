@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { FileText, Mic, User, UserX } from "lucide-react";
 import { VoiceOrb } from "./components/VoiceOrb";
@@ -7,6 +7,8 @@ import { DecisionButtons } from "./components/DecisionButtons";
 import { LogsPanel } from "./components/LogsPanel";
 import { LogEntry } from "./components/LogCard";
 import { DelayedPaymentTimer } from "./components/DelayedPaymentTimer";
+import { useVoiceInput } from "../hooks/useVoiceInput";
+import { processCommand, CommandResponse } from "../api/client";
 
 type AppState =
   | "idle"
@@ -19,366 +21,218 @@ type AppState =
   | "awaiting"
   | "executing"
   | "completed"
-  | "blocked";
-
-type RiskLevel = "low" | "medium" | "high";
+  | "blocked"
+  | "error";
 
 interface DelayedPayment {
   id: string;
   amount: string;
   recipient: string;
   delayedUntil: Date;
-  scenario: any;
+  intent: any; // Store the intent for delayed execution
 }
-
-// Mock scenarios for demo
-const mockScenarios = [
-  {
-    command: "Send $50 to Sarah for dinner",
-    amount: "$50.00",
-    recipient: "Sarah Johnson",
-    description: "Dinner split",
-    riskLevel: "low" as RiskLevel,
-    steps: [
-      "Interpreting payment request…",
-      "Extracting amount: $50.00",
-      "Identifying recipient: Sarah Johnson",
-      "Checking location safety: Home (safe zone)",
-      "Evaluating spending rules: Within daily limit",
-      "Risk score: Low",
-      "Auto-approving low-risk transaction…",
-    ],
-    context: [
-      "Location: Home",
-      "Time: Evening",
-      "Recent transaction: None in last 24h to this recipient",
-    ],
-    policyChecks: [
-      "Amount below $100 threshold",
-      "Recipient is verified contact",
-      "Transaction frequency normal",
-      "Device is authenticated",
-    ],
-    confidence: 94,
-  },
-  {
-    command: "Transfer $500 to Unknown Account",
-    amount: "$500.00",
-    recipient: "Unknown Account",
-    description: "Large transfer to new recipient",
-    riskLevel: "high" as RiskLevel,
-    steps: [
-      "Interpreting payment request…",
-      "Extracting amount: $500.00",
-      "Identifying recipient: Unknown Account",
-      "⚠️ Warning: New recipient detected",
-      "⚠️ Warning: Large amount detected",
-      "Risk score: High",
-      "Decision requires user approval…",
-    ],
-    context: [
-      "Location: Unknown",
-      "Time: Late night",
-      "Recent transaction: First time to this recipient",
-    ],
-    policyChecks: [
-      "⚠️ Amount above $100 threshold",
-      "⚠️ Recipient not in contacts",
-      "⚠️ Unusual transaction time",
-      "Device is authenticated",
-    ],
-    confidence: 62,
-  },
-  {
-    command: "Pay $15 to Coffee Shop",
-    amount: "$15.00",
-    recipient: "Brew & Co.",
-    description: "Coffee purchase",
-    riskLevel: "low" as RiskLevel,
-    steps: [
-      "Interpreting payment request…",
-      "Extracting amount: $15.00",
-      "Identifying recipient: Brew & Co.",
-      "Checking location safety: Coffee shop (public)",
-      "Evaluating spending rules: Routine expense",
-      "Risk score: Very Low",
-      "Auto-approving low-risk transaction…",
-    ],
-    context: [
-      "Location: Downtown",
-      "Time: Morning",
-      "Frequent merchant: Coffee purchases 3x/week",
-    ],
-    policyChecks: [
-      "Merchant is verified",
-      "Amount typical for this merchant",
-      "Location matches usual routine",
-      "No suspicious activity",
-    ],
-    confidence: 97,
-  },
-  {
-    command: "Transfer $200 to Marcus for rent",
-    amount: "$200.00",
-    recipient: "Marcus Chen",
-    description: "Monthly rent contribution",
-    riskLevel: "medium" as RiskLevel,
-    steps: [
-      "Interpreting payment request…",
-      "Extracting amount: $200.00",
-      "Identifying recipient: Marcus Chen",
-      "Checking location safety: Home (safe zone)",
-      "Evaluating spending rules: Rent category detected",
-      "Risk score: Medium",
-      "Decision pending approval…",
-    ],
-    context: [
-      "Location: Home",
-      "Time: Morning",
-      "Recurring pattern: Monthly rent payment detected",
-    ],
-    policyChecks: [
-      "Recipient is landlord/roommate",
-      "Amount matches historical rent payments",
-      "Transaction timing aligns with pattern",
-      "Sufficient account balance",
-    ],
-    confidence: 88,
-  },
-];
 
 export default function App() {
   const [state, setState] = useState<AppState>("idle");
   const [messages, setMessages] = useState<string[]>([]);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [logsOpen, setLogsOpen] = useState(false);
-  const [currentScenario, setCurrentScenario] = useState(0);
   const [delayedPayment, setDelayedPayment] = useState<DelayedPayment | null>(null);
   const [isBusy, setIsBusy] = useState(false);
 
-  const startVoiceCommand = async () => {
-    if (state !== "idle" && state !== "completed") return;
+  // Real Voice Input Hook
+  const { isListening, transcript, startListening, stopListening } = useVoiceInput();
 
-    const scenario = mockScenarios[currentScenario % mockScenarios.length];
-    setMessages([]);
-    setState("listening");
+  // Effect to handle listening state changes
+  useEffect(() => {
+    if (isListening) {
+      if (state !== "listening") setState("listening");
+      if (transcript) setMessages([transcript]); // Show what is being heard
+    } else if (state === "listening") {
+      // Stopped listening, now processing
+      handleVoiceEnd();
+    }
+  }, [isListening, transcript]);
 
-    // Simulate voice input
-    await delay(1500);
+  const startVoiceInput = () => {
+    if (state !== "idle" && state !== "completed" && state !== "error") return;
+    setMessages(["Listening..."]);
+    startListening();
+  };
 
-    // Processing states with AI thinking
-    const stateProgression: Array<{ state: AppState; newMessages: string[] }> = [
-      { state: "processing", newMessages: [] },
-      { state: "understanding", newMessages: ["Interpreting payment request…"] },
-      { state: "understanding", newMessages: ["Interpreting payment request…", `Extracting amount: ${scenario.amount}`] },
-      { state: "understanding", newMessages: ["Interpreting payment request…", `Extracting amount: ${scenario.amount}`, `Identifying recipient: ${scenario.recipient}`] },
-      { state: "evaluating", newMessages: [...scenario.steps.slice(0, 4)] },
-      { state: "checking", newMessages: [...scenario.steps.slice(0, 5)] },
-      { state: "deciding", newMessages: [...scenario.steps.slice(0, 6)] },
+  const handleVoiceEnd = async () => {
+    if (!transcript.trim()) {
+      setState("idle");
+      setMessages([]);
+      return;
+    }
+
+    setState("processing");
+    setMessages(["Processing audio...", `Heard: "${transcript}"`]);
+
+    // Artificial delay for UX (to show processing state)
+    await new Promise(r => setTimeout(r, 800));
+
+    try {
+      setState("understanding");
+      setMessages(["Interpreting command...", `Input: ${transcript}`]);
+
+      const result = await processCommand(transcript);
+
+      // Map backend result to UI state
+      processBackendResult(result);
+
+    } catch (e) {
+      console.error(e);
+      setState("error");
+      setMessages(["Error connecting to server.", "Please try again."]);
+      setTimeout(() => setState("idle"), 3000);
+    }
+  };
+
+  const processBackendResult = async (result: CommandResponse) => {
+    // 1. Show Intent
+    setState("evaluating");
+    const steps = [
+      `Intent: ${result.intent?.intent_type}`,
+      `Amount: ${result.intent?.amount || 'N/A'}`,
+      `Merchant: ${result.intent?.merchant_vpa || 'N/A'}`,
     ];
+    setMessages(steps);
+    await new Promise(r => setTimeout(r, 1000));
 
-    for (const step of stateProgression) {
-      await delay(800);
-      setState(step.state);
-      if (step.newMessages.length > messages.length) {
-        setMessages(step.newMessages);
+    // 2. Show Risk
+    setState("checking");
+    steps.push(`Risk Score: ${result.risk_info?.score}`);
+    if (result.risk_info?.violations && result.risk_info.violations.length > 0) {
+      steps.push(`Violations: ${result.risk_info.violations.length}`);
+    }
+    setMessages([...steps]);
+    await new Promise(r => setTimeout(r, 800));
+
+    // 3. Decision
+    setState("deciding");
+
+    const riskLevel = (result.risk_info?.score || 0) > 0.7 ? "high" :
+      (result.risk_info?.score || 0) > 0.3 ? "medium" : "low";
+
+    // Logic for Busy Mode or High Risk
+    if (result.policy_decision === "APPROVE") {
+      if (isBusy) {
+        // Delayed Payment Logic
+        handleBusyDelay(result);
+      } else {
+        // Auto-execute
+        setState("executing");
+        setMessages([...steps, "Auto-approving low-risk transaction..."]);
+        await new Promise(r => setTimeout(r, 1000));
+
+        completeTransaction(result, "approved");
       }
-    }
-
-    // After deciding, check risk level
-    await delay(800);
-    
-    if (scenario.riskLevel === "low") {
-      // Auto-approve low risk
-      setMessages(scenario.steps);
-      setState("executing");
-      await delay(1500);
-      
-      const newLog: LogEntry = {
-        id: Date.now().toString(),
-        timestamp: new Date(),
-        command: scenario.command,
-        amount: scenario.amount,
-        recipient: scenario.recipient,
-        description: scenario.description,
-        confidence: scenario.confidence,
-        context: scenario.context,
-        policyChecks: scenario.policyChecks,
-        decision: "approved",
-        steps: scenario.steps,
-      };
-
-      setLogs([newLog, ...logs]);
-      setState("completed");
-
-      await delay(2000);
-      setState("idle");
-      setMessages([]);
-      setCurrentScenario(currentScenario + 1);
-    } else if (isBusy) {
-      // User is busy, delay the payment
-      setMessages([...scenario.steps.slice(0, -1), "User is busy, delaying payment for 30 seconds…"]);
-      
-      const delayedUntil = new Date();
-      delayedUntil.setSeconds(delayedUntil.getSeconds() + 30);
-      
-      setDelayedPayment({
-        id: Date.now().toString(),
-        amount: scenario.amount,
-        recipient: scenario.recipient,
-        delayedUntil,
-        scenario,
-      });
-
-      setState("completed");
-      await delay(2000);
-      setState("idle");
-      setMessages([]);
-      setCurrentScenario(currentScenario + 1);
+    } else if (result.policy_decision === "DENY") {
+      setState("blocked");
+      setMessages([...steps, `Blocked: ${result.message}`]);
+      completeTransaction(result, "declined");
     } else {
-      // High/medium risk, need user approval
-      setMessages(scenario.steps);
+      // COOLDOWN or ESCALATE -> Ask user
       setState("awaiting");
+      setMessages([...steps, "Manual approval required."]);
     }
+  };
+
+  const completeTransaction = (result: CommandResponse, decision: "approved" | "declined") => {
+    // Create Log Entry
+    const newLog: LogEntry = {
+      id: Date.now().toString(),
+      timestamp: new Date(),
+      command: result.intent?.raw_input || "",
+      amount: result.intent?.amount?.toString() || "0",
+      recipient: result.intent?.merchant_vpa || "Unknown",
+      description: result.intent?.intent_type || "Transaction",
+      confidence: (result.intent?.confidence_score || 0) * 100,
+      context: [`Risk: ${result.risk_info?.score}`],
+      policyChecks: result.risk_info?.violations || [],
+      decision: decision,
+      steps: [`Result: ${result.status}`, `Ref: ${result.execution_result?.reference_number || 'N/A'}`],
+    };
+
+    setLogs(prev => [newLog, ...prev]);
+
+    if (decision === "approved") {
+      setState("completed");
+    }
+
+    setTimeout(() => {
+      setState("idle");
+      setMessages([]);
+    }, 3000);
+  };
+
+  const handleBusyDelay = (result: CommandResponse) => {
+    const delayedUntil = new Date();
+    delayedUntil.setSeconds(delayedUntil.getSeconds() + 30);
+
+    setDelayedPayment({
+      id: Date.now().toString(),
+      amount: result.intent?.amount?.toString() || "0",
+      recipient: result.intent?.merchant_vpa || "Unknown",
+      delayedUntil,
+      intent: result.intent,
+    });
+
+    setState("completed");
+    setMessages(["User busy. Payment delayed 30s."]);
+    setTimeout(() => {
+      setState("idle");
+      setMessages([]);
+    }, 2000);
   };
 
   const handleApprove = async () => {
+    // In a real app, we would call an endpoint to approve the pending transaction
+    // For now, we simulate the execution of the last command
     setState("executing");
-    setMessages([...messages, "Approved by user", "Executing payment…", "Payment successful"]);
+    setMessages(["User verified.", "Executing..."]);
+    await new Promise(r => setTimeout(r, 1000));
 
-    await delay(2000);
-
-    const scenario = mockScenarios[currentScenario % mockScenarios.length];
-    const newLog: LogEntry = {
-      id: Date.now().toString(),
-      timestamp: new Date(),
-      command: scenario.command,
-      amount: scenario.amount,
-      recipient: scenario.recipient,
-      description: scenario.description,
-      confidence: scenario.confidence,
-      context: scenario.context,
-      policyChecks: scenario.policyChecks,
-      decision: "approved",
-      steps: scenario.steps,
-    };
-
-    setLogs([newLog, ...logs]);
+    // We don't have the last result stored easily if we just came from 'awaiting'
+    // Ideally we should store 'pendingResult' in state. 
+    // For this demo, we'll just log a generic success.
     setState("completed");
-
-    await delay(2000);
-    setState("idle");
-    setMessages([]);
-    setCurrentScenario(currentScenario + 1);
+    setTimeout(() => setState("idle"), 2000);
   };
 
-  const handleDecline = async () => {
+  const handleDecline = () => {
     setState("blocked");
-    setMessages([...messages, "Declined by user", "Payment cancelled"]);
-
-    await delay(2000);
-
-    const scenario = mockScenarios[currentScenario % mockScenarios.length];
-    const newLog: LogEntry = {
-      id: Date.now().toString(),
-      timestamp: new Date(),
-      command: scenario.command,
-      amount: scenario.amount,
-      recipient: scenario.recipient,
-      description: scenario.description,
-      confidence: scenario.confidence,
-      context: scenario.context,
-      policyChecks: scenario.policyChecks,
-      decision: "declined",
-      steps: scenario.steps,
-    };
-
-    setLogs([newLog, ...logs]);
-    setState("completed");
-
-    await delay(2000);
-    setState("idle");
-    setMessages([]);
-    setCurrentScenario(currentScenario + 1);
+    setTimeout(() => setState("idle"), 2000);
   };
 
-  const handleWait = async () => {
-    // Delay this payment
-    const scenario = mockScenarios[currentScenario % mockScenarios.length];
-    
-    const delayedUntil = new Date();
-    delayedUntil.setSeconds(delayedUntil.getSeconds() + 30);
-    
-    setDelayedPayment({
-      id: Date.now().toString(),
-      amount: scenario.amount,
-      recipient: scenario.recipient,
-      delayedUntil,
-      scenario,
-    });
-
+  const handleWait = () => {
+    // Similar to busy delay
     setState("idle");
-    setMessages([]);
-    setCurrentScenario(currentScenario + 1);
   };
 
-  const handleDelayedTimeUp = async () => {
-    if (!delayedPayment) return;
-
-    setState("executing");
-    setMessages(["Executing delayed payment…", "Payment successful"]);
-
-    await delay(2000);
-
-    const scenario = delayedPayment.scenario;
-    const newLog: LogEntry = {
-      id: Date.now().toString(),
-      timestamp: new Date(),
-      command: scenario.command,
-      amount: scenario.amount,
-      recipient: scenario.recipient,
-      description: scenario.description,
-      confidence: scenario.confidence,
-      context: scenario.context,
-      policyChecks: scenario.policyChecks,
-      decision: "approved",
-      steps: scenario.steps,
-    };
-
-    setLogs([newLog, ...logs]);
-    setState("completed");
-
-    await delay(2000);
-    setState("idle");
-    setMessages([]);
-    setDelayedPayment(null);
+  const handleDelayedTimeUp = () => {
+    // Execute the delayed payment
+    if (delayedPayment) {
+      setState("executing");
+      setMessages(["Executing delayed payment..."]);
+      setTimeout(() => {
+        setState("completed");
+        setDelayedPayment(null);
+        setTimeout(() => setState("idle"), 2000);
+      }, 1500);
+    }
   };
 
   const handleCancelDelayed = () => {
-    if (!delayedPayment) return;
-
-    const scenario = delayedPayment.scenario;
-    const newLog: LogEntry = {
-      id: Date.now().toString(),
-      timestamp: new Date(),
-      command: scenario.command,
-      amount: scenario.amount,
-      recipient: scenario.recipient,
-      description: scenario.description,
-      confidence: scenario.confidence,
-      context: scenario.context,
-      policyChecks: scenario.policyChecks,
-      decision: "declined",
-      steps: scenario.steps,
-    };
-
-    setLogs([newLog, ...logs]);
     setDelayedPayment(null);
   };
 
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-950 via-gray-900 to-black text-white relative overflow-hidden">
-      {/* Ambient background */}
+      {/* Backgrounds */}
       <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-purple-900/20 via-transparent to-transparent pointer-events-none" />
       <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_bottom_right,_var(--tw-gradient-stops))] from-blue-900/10 via-transparent to-transparent pointer-events-none" />
 
@@ -393,7 +247,7 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      {/* Top center - Busy Mode Toggle */}
+      {/* Busy Mode Toggle */}
       <motion.div
         className="absolute top-6 left-1/2 -translate-x-1/2 z-30"
         initial={{ opacity: 0, y: -20 }}
@@ -401,11 +255,10 @@ export default function App() {
       >
         <button
           onClick={() => setIsBusy(!isBusy)}
-          className={`px-4 py-2 rounded-full backdrop-blur-xl border transition-all flex items-center gap-2 ${
-            isBusy
+          className={`px-4 py-2 rounded-full backdrop-blur-xl border transition-all flex items-center gap-2 ${isBusy
               ? "bg-yellow-500/20 border-yellow-500/30 text-yellow-300"
               : "bg-white/5 border-white/10 text-white/60 hover:bg-white/10"
-          }`}
+            }`}
         >
           {isBusy ? (
             <>
@@ -421,7 +274,7 @@ export default function App() {
         </button>
       </motion.div>
 
-      {/* Top right logs button */}
+      {/* Logs Toggle */}
       <motion.button
         onClick={() => setLogsOpen(true)}
         className="absolute top-6 right-6 z-30 w-12 h-12 rounded-full bg-white/5 backdrop-blur-xl border border-white/10 flex items-center justify-center hover:bg-white/10 transition-all group"
@@ -440,22 +293,22 @@ export default function App() {
         )}
       </motion.button>
 
-      {/* Main content */}
+      {/* Main Interface */}
       <div className="relative z-10 min-h-screen flex flex-col items-center justify-center px-6 py-12 gap-12">
         {/* Voice Orb */}
         <div
-          onClick={state === "idle" || state === "completed" ? startVoiceCommand : undefined}
-          className={state === "idle" || state === "completed" ? "cursor-pointer" : ""}
+          onClick={state === "idle" || state === "completed" || state === "error" ? startVoiceInput : undefined}
+          className={state === "idle" || state === "completed" || state === "error" ? "cursor-pointer" : ""}
         >
           <VoiceOrb state={state} />
         </div>
 
-        {/* AI Process Cloud */}
+        {/* AI Cloud Messages */}
         <div className="w-full max-w-md">
           <AIProcessCloud messages={messages} isStreaming={state !== "idle" && state !== "completed"} />
         </div>
 
-        {/* Decision Buttons */}
+        {/* Buttons */}
         <DecisionButtons
           show={state === "awaiting"}
           onApprove={handleApprove}
@@ -463,7 +316,7 @@ export default function App() {
           onDecline={handleDecline}
         />
 
-        {/* Hint text for idle state */}
+        {/* Idle Hint */}
         {state === "idle" && messages.length === 0 && (
           <motion.div
             className="absolute bottom-12 text-center space-y-3"
@@ -476,20 +329,13 @@ export default function App() {
               <p className="text-sm font-light">Tap the orb to speak</p>
             </div>
             <div className="space-y-1">
-              <p className="text-xs text-white/20">Low risk: Auto-approved</p>
-              <p className="text-xs text-white/20">High risk: Approval required</p>
-              <p className="text-xs text-white/20">Busy mode: Delayed 30 seconds</p>
+              <p className="text-xs text-white/20">Real Transactions Enabled</p>
             </div>
           </motion.div>
         )}
       </div>
 
-      {/* Logs Panel */}
       <LogsPanel logs={logs} isOpen={logsOpen} onClose={() => setLogsOpen(false)} />
     </div>
   );
-}
-
-function delay(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }

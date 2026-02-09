@@ -1,0 +1,191 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.14.2, pytest-9.0.2, pluggy-1.6.0 -- /Users/atharvamendhulkar/Desktop/CAPS/venv/bin/python3.14
+cachedir: .pytest_cache
+rootdir: /Users/atharvamendhulkar/Desktop/CAPS
+configfile: pyproject.toml
+plugins: anyio-4.12.1, asyncio-1.3.0, cov-7.0.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 2 items
+
+tests/test_full_stack_fraud.py::test_e2e_blocked_merchant_denial FAILED
+tests/test_full_stack_fraud.py::test_e2e_brand_impersonation_blocking FAILED
+
+=================================== FAILURES ===================================
+_______________________ test_e2e_blocked_merchant_denial _______________________
+
+    def test_e2e_blocked_merchant_denial():
+        # 1. Setup Policy Engine
+        engine = PolicyEngine()
+    
+        # 2. Seed Fraud Intelligence with a bad merchant
+        # "bad_actor@upi" -> Make them BLOCKED
+        # We can use update_transaction_stats to transition them, or manually insert.
+        # Let's use internal methods to force state for test speed.
+    
+        bad_vpa = "bad_actor@upi"
+        conn = context_service.fi._get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """INSERT OR REPLACE INTO scores
+               (merchant_vpa, risk_state, total_reports, last_updated)
+               VALUES (?, ?, ?, ?)""",
+            (bad_vpa, "BLOCKED", 100, "2023-01-01T00:00:00")
+        )
+        conn.commit()
+        context_service.fi._close_connection(conn)
+    
+        # 3. Verify Context Service returns BLOCKED
+        ctx = context_service.get_merchant_context(bad_vpa)
+        assert ctx.risk_state == "BLOCKED"
+    
+        # 4. Create Intent
+        intent = PaymentIntent(
+            intent_type=IntentType.PAYMENT,
+            amount=500.0,
+            currency="INR",
+            merchant_vpa=bad_vpa,
+            confidence_score=1.0,
+            original_text=f"pay {bad_vpa} 500"
+        )
+    
+        # 5. Evaluate Policy
+        # We pass the context we fetched (Simulation of generic ContextClient/Evaluator)
+        result = engine.evaluate(intent, merchant_context=ctx)
+    
+        # 6. Expect DENY
+        assert result.decision.value == "DENY"
+>       assert "Merchant is BLOCKED" in result.reason
+E       AssertionError: assert 'Merchant is BLOCKED' in 'Critical security violation: Cannot verify daily spend without user context'
+E        +  where 'Critical security violation: Cannot verify daily spend without user context' = PolicyResult(decision=<PolicyDecision.DENY: 'DENY'>, reason='Critical security violation: Cannot verify daily spend without user context', risk_score=0.7692307692307693, violations=[RuleViolation(rule_name='daily_spend_limit', category=<RuleCategory.HARD_INVARIANT: 'HARD_INVARIANT'>, message='Cannot verify daily spend without user context', severity='critical', details={'reason': 'missing_context'}), RuleViolation(rule_name='balance_check', category=<RuleCategory.HARD_INVARIANT: 'HARD_INVARIANT'>, message='Cannot verify balance without user context', severity='critical', details={'reason': 'missing_context'}), RuleViolation(rule_name='merchant_risk_state', category=<RuleCategory.BEHAVIORAL: 'BEHAVIORAL'>, message='Merchant is BLOCKED due to fraud risk.', severity='critical', details={'risk_state': 'BLOCKED'})], passed_rules=['amount_limit', 'transaction_velocity', 'merchant_switching', 'confidence_threshold', 'prompt_injection', 'intent_splitting', 'device_validation', 'merchant_reputation', 'fraud_reports', 'brand_impersonation'], evaluation_time_ms=0.3809928894042969).reason
+
+tests/test_full_stack_fraud.py:61: AssertionError
+------------------------------ Captured log call -------------------------------
+WARNING  caps.policy.engine:engine.py:92 Rule 'daily_spend_limit' failed: Cannot verify daily spend without user context
+WARNING  caps.policy.engine:engine.py:92 Rule 'balance_check' failed: Cannot verify balance without user context
+WARNING  caps.policy.engine:engine.py:92 Rule 'merchant_risk_state' failed: Merchant is BLOCKED due to fraud risk.
+____________________ test_e2e_brand_impersonation_blocking _____________________
+
+    def test_e2e_brand_impersonation_blocking():
+        # Test Brand Impersonation (Layer 4 Rule)
+        # This doesn't strictly depend on ContextService, but good to verify here too.
+        engine = PolicyEngine()
+    
+        intent = PaymentIntent(
+            intent_type=IntentType.PAYMENT,
+            amount=500.0,
+            currency="INR",
+            merchant_vpa="flipk4rt@upi", # Imposter
+            confidence_score=1.0,
+            original_text="pay flipk4rt 500"
+        )
+    
+        result = engine.evaluate(intent)
+    
+        assert result.decision.value == "DENY"
+>       assert "Brand Impersonation Detected" in result.reason
+E       assert 'Brand Impersonation Detected' in 'Critical security violation: Cannot verify daily spend without user context'
+E        +  where 'Critical security violation: Cannot verify daily spend without user context' = PolicyResult(decision=<PolicyDecision.DENY: 'DENY'>, reason='Critical security violation: Cannot verify daily spend without user context', risk_score=0.7692307692307693, violations=[RuleViolation(rule_name='daily_spend_limit', category=<RuleCategory.HARD_INVARIANT: 'HARD_INVARIANT'>, message='Cannot verify daily spend without user context', severity='critical', details={'reason': 'missing_context'}), RuleViolation(rule_name='balance_check', category=<RuleCategory.HARD_INVARIANT: 'HARD_INVARIANT'>, message='Cannot verify balance without user context', severity='critical', details={'reason': 'missing_context'}), RuleViolation(rule_name='brand_impersonation', category=<RuleCategory.BEHAVIORAL: 'BEHAVIORAL'>, message="Brand Impersonation Detected: VPA 'flipk4rt@upi' mimics brand 'flipkart'.", severity='critical', details={'merchant_vpa': 'flipk4rt@upi', 'target_brand': 'flipkart'})], passed_rules=['amount_limit', 'transaction_velocity', 'merchant_switching', 'confidence_threshold', 'prompt_injection', 'intent_splitting', 'device_validation', 'merchant_reputation', 'fraud_reports', 'merchant_risk_state'], evaluation_time_ms=0.11801719665527344).reason
+
+tests/test_full_stack_fraud.py:80: AssertionError
+------------------------------ Captured log call -------------------------------
+WARNING  caps.policy.engine:engine.py:92 Rule 'daily_spend_limit' failed: Cannot verify daily spend without user context
+WARNING  caps.policy.engine:engine.py:92 Rule 'balance_check' failed: Cannot verify balance without user context
+WARNING  caps.policy.engine:engine.py:92 Rule 'brand_impersonation' failed: Brand Impersonation Detected: VPA 'flipk4rt@upi' mimics brand 'flipkart'.
+=============================== warnings summary ===============================
+src/caps/context/mock_data.py:24
+  /Users/atharvamendhulkar/Desktop/CAPS/src/caps/context/mock_data.py:24: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    last_transaction_time=datetime.utcnow() - timedelta(minutes=15),
+
+src/caps/context/mock_data.py:37
+  /Users/atharvamendhulkar/Desktop/CAPS/src/caps/context/mock_data.py:37: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    last_transaction_time=datetime.utcnow() - timedelta(minutes=30),
+
+src/caps/context/mock_data.py:50
+  /Users/atharvamendhulkar/Desktop/CAPS/src/caps/context/mock_data.py:50: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    last_transaction_time=datetime.utcnow() - timedelta(seconds=45),
+
+src/caps/context/mock_data.py:76
+  /Users/atharvamendhulkar/Desktop/CAPS/src/caps/context/mock_data.py:76: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    last_transaction_time=datetime.utcnow() - timedelta(minutes=45),
+
+src/caps/context/mock_data.py:93
+  /Users/atharvamendhulkar/Desktop/CAPS/src/caps/context/mock_data.py:93: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    registration_date=datetime.utcnow() - timedelta(days=730),
+
+src/caps/context/mock_data.py:104
+  /Users/atharvamendhulkar/Desktop/CAPS/src/caps/context/mock_data.py:104: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    registration_date=datetime.utcnow() - timedelta(days=365),
+
+src/caps/context/mock_data.py:115
+  /Users/atharvamendhulkar/Desktop/CAPS/src/caps/context/mock_data.py:115: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    registration_date=datetime.utcnow() - timedelta(days=15),
+
+src/caps/context/mock_data.py:126
+  /Users/atharvamendhulkar/Desktop/CAPS/src/caps/context/mock_data.py:126: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    registration_date=datetime.utcnow() - timedelta(days=7),
+
+src/caps/context/mock_data.py:137
+  /Users/atharvamendhulkar/Desktop/CAPS/src/caps/context/mock_data.py:137: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    registration_date=datetime.utcnow() - timedelta(days=540),
+
+tests/test_full_stack_fraud.py::test_e2e_blocked_merchant_denial
+  /Users/atharvamendhulkar/Desktop/CAPS/src/caps/context/mock_data.py:158: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    registration_date=datetime.utcnow(),
+
+tests/test_full_stack_fraud.py::test_e2e_blocked_merchant_denial
+tests/test_full_stack_fraud.py::test_e2e_brand_impersonation_blocking
+  /Users/atharvamendhulkar/Desktop/CAPS/venv/lib/python3.14/site-packages/pydantic/main.py:250: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    validated_self = self.__pydantic_validator__.validate_python(data, self_instance=self)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+================================ tests coverage ================================
+_______________ coverage: platform darwin, python 3.14.2-final-0 _______________
+
+Name                                        Stmts   Miss  Cover   Missing
+-------------------------------------------------------------------------
+src/caps/__init__.py                            1      0   100%
+src/caps/agent/__init__.py                      2      2     0%   3-5
+src/caps/agent/intent_interpreter.py           57     57     0%   13-202
+src/caps/context/__init__.py                    3      0   100%
+src/caps/context/config.py                      8      0   100%
+src/caps/context/context_client.py             69     56    19%   36-37, 52-68, 83-99, 111-126, 138-154, 166-182
+src/caps/context/context_service.py            65     31    52%   42, 57-82, 95, 130-132, 142-158, 168-171, 185-188
+src/caps/context/mock_data.py                   8      1    88%   144
+src/caps/context/models.py                     29      0   100%
+src/caps/execution/__init__.py                  4      4     0%   3-11
+src/caps/execution/engine.py                   65     65     0%   3-219
+src/caps/execution/models.py                   51     51     0%   3-93
+src/caps/execution/router.py                   40     40     0%   3-124
+src/caps/intelligence/__init__.py               3      0   100%
+src/caps/intelligence/aggregator.py           141     88    38%   65, 70, 95-114, 137, 148-161, 165-178, 186-199, 207-220, 232-279, 283-353, 362-374, 431-454, 458, 493-495
+src/caps/intelligence/brand_protection.py      54      5    91%   34-35, 53, 59, 98
+src/caps/intelligence/models.py                52      2    96%   99-107
+src/caps/intelligence/risk_engine.py           31     20    35%   49-84
+src/caps/ledger/__init__.py                     3      0   100%
+src/caps/ledger/ledger.py                     123     98    20%   40-52, 56-58, 62-63, 86-103, 120-137, 141-153, 157-167, 175-188, 192-202, 214-253, 260-265, 269-298, 302-324, 328-339, 343-354, 358-360
+src/caps/ledger/models.py                      40      5    88%   74-82, 87-89
+src/caps/main.py                              266    266     0%   19-471
+src/caps/memory/__init__.py                     3      3     0%   3-6
+src/caps/memory/models.py                      33     33     0%   3-56
+src/caps/memory/session.py                    103    103     0%   3-243
+src/caps/policy/__init__.py                     3      0   100%
+src/caps/policy/engine.py                      64     14    78%   76, 111, 132, 143-170, 179
+src/caps/policy/models.py                      35      3    91%   51, 56, 61
+src/caps/policy/rules/__init__.py              16      1    94%   53
+src/caps/policy/rules/behavioral.py            68     14    79%   38, 44-57, 78, 85, 120, 126, 159, 195, 210-234
+src/caps/policy/rules/hard_invariants.py       47     15    68%   39, 43, 46, 75, 78, 87-104, 125, 128, 136-148
+src/caps/policy/rules/threat_defense.py        46     17    63%   59, 62, 95-112, 133, 139-161
+src/caps/policy/rules/velocity.py              31      9    71%   38, 44-56, 77, 83-94
+src/caps/rag/__init__.py                        4      4     0%   3-11
+src/caps/rag/models.py                         36     36     0%   3-70
+src/caps/rag/retriever.py                      82     82     0%   3-255
+src/caps/rag/vector_store.py                   71     71     0%   3-165
+src/caps/schema/__init__.py                     3      0   100%
+src/caps/schema/intent_schema.py               44      6    86%   94, 97, 101, 105, 116, 119
+src/caps/schema/validator.py                   38     26    32%   25-27, 44, 60-89, 106-110
+-------------------------------------------------------------------------
+TOTAL                                        1842   1228    33%
+=========================== short test summary info ============================
+FAILED tests/test_full_stack_fraud.py::test_e2e_blocked_merchant_denial - Ass...
+FAILED tests/test_full_stack_fraud.py::test_e2e_brand_impersonation_blocking
+======================== 2 failed, 12 warnings in 0.19s ========================
