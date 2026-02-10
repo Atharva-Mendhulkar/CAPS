@@ -86,3 +86,6 @@ dmypy.json
 
 # Jupyter
 .ipynb_checkpoints
+
+#db
+./caps.db
